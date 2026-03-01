@@ -72,6 +72,7 @@ Set these optional `.env` values:
 - `ENERGY_SYNC_START_DATE=2025-01-01`
 - `ENERGY_SQLITE_DB=energy_daily.sqlite`
 - `ENERGY_SQLITE_TABLE=daily_energy`
+- `HEALTHCHECKS_PING_URL=https://hc-ping.com/<uuid>` (optional monitoring)
 
 Run once manually:
 
@@ -96,6 +97,12 @@ SQLite schema columns match the Excel export:
 - `self_consumed_kwh`
 - `grid_import_kwh`
 - `grid_export_kwh`
+
+Healthchecks behavior (when `HEALTHCHECKS_PING_URL` is set):
+
+- Sends `<url>/start` at sync start.
+- Sends `<url>` on success.
+- Sends `<url>/fail` on failure.
 
 Example cron (daily at 01:15):
 
@@ -128,4 +135,5 @@ Notes:
 - Default schedule is daily at `01:00`. Override with `-e SYNC_HOUR=2 -e SYNC_MINUTE=30`.
 - SQLite DB defaults to `/data/energy_daily.sqlite` in container (`ENERGY_SQLITE_DB`).
 - Use `-e RUN_ON_STARTUP=1` to execute one sync immediately when container starts.
+- Healthchecks also works in Docker via `HEALTHCHECKS_PING_URL` in `.env` or `-e HEALTHCHECKS_PING_URL=...`.
 - Logs: `docker logs ha-energy-sync`.

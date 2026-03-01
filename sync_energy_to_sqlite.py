@@ -7,6 +7,7 @@ import argparse
 import os
 import re
 import sqlite3
+import subprocess
 import sys
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -41,6 +42,11 @@ def parse_args() -> argparse.Namespace:
         default=os.getenv("ENERGY_SQLITE_TABLE", "daily_energy"),
         help="SQLite table name (default: daily_energy)",
     )
+    parser.add_argument(
+        "--healthchecks-url",
+        default=os.getenv("HEALTHCHECKS_PING_URL"),
+        help="Optional base ping URL (for example https://hc-ping.com/<uuid>)",
+    )
 
     parser.add_argument("--solar-stat", default=DEFAULT_METRICS[0].statistic_id, help="Statistic ID for solar production")
     parser.add_argument(
@@ -52,6 +58,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--grid-export-stat", default=DEFAULT_METRICS[3].statistic_id, help="Statistic ID for grid export")
 
     return parser.parse_args()
+
+
+def ping_healthchecks(base_url: str | None, suffix: str) -> None:
+    if not base_url:
+        return
+
+    url = base_url.rstrip("/") + suffix
+    cmd = ["curl", "-fsS", "--max-time", "10", "-o", "/dev/null", url]
+    proc = subprocess.run(cmd, check=False, capture_output=True, text=True)
+    if proc.returncode != 0:
+        print(f"Warning: healthcheck ping failed for {url}: {proc.stderr.strip()}", file=sys.stderr)
 
 
 def validate_table_name(name: str) -> str:
@@ -125,83 +142,96 @@ def upsert_rows(conn: sqlite3.Connection, table: str, rows: list[dict]) -> None:
 def main() -> int:
     load_dotenv()
     args = parse_args()
-
-    if not args.base_url:
-        print("Missing Home Assistant URL. Set --base-url or HASS_URL.", file=sys.stderr)
-        return 2
-    if not args.token:
-        print("Missing Home Assistant token. Set --token or HASS_TOKEN.", file=sys.stderr)
-        return 2
+    healthchecks_url = args.healthchecks_url
+    ping_healthchecks(healthchecks_url, "/start")
 
     try:
-        table_name = validate_table_name(args.table)
-    except ValueError as exc:
-        print(str(exc), file=sys.stderr)
-        return 2
+        if not args.base_url:
+            print("Missing Home Assistant URL. Set --base-url or HASS_URL.", file=sys.stderr)
+            ping_healthchecks(healthchecks_url, "/fail")
+            return 2
+        if not args.token:
+            print("Missing Home Assistant token. Set --token or HASS_TOKEN.", file=sys.stderr)
+            ping_healthchecks(healthchecks_url, "/fail")
+            return 2
 
-    try:
-        env_start = parse_day(os.getenv("ENERGY_SYNC_START_DATE", "2024-01-01"))
-    except argparse.ArgumentTypeError as exc:
-        print(f"Invalid ENERGY_SYNC_START_DATE: {exc}", file=sys.stderr)
-        return 2
+        try:
+            table_name = validate_table_name(args.table)
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            ping_healthchecks(healthchecks_url, "/fail")
+            return 2
 
-    metrics = (
-        MetricConfig("solar_production", "solar_production_kwh", args.solar_stat),
-        MetricConfig("house_consumption", "house_consumption_kwh", args.consumption_stat),
-        MetricConfig("grid_import", "grid_import_kwh", args.grid_import_stat),
-        MetricConfig("grid_export", "grid_export_kwh", args.grid_export_stat),
-    )
+        try:
+            env_start = parse_day(os.getenv("ENERGY_SYNC_START_DATE", "2024-01-01"))
+        except argparse.ArgumentTypeError as exc:
+            print(f"Invalid ENERGY_SYNC_START_DATE: {exc}", file=sys.stderr)
+            ping_healthchecks(healthchecks_url, "/fail")
+            return 2
 
-    client = HomeAssistantClient(args.base_url, args.token)
-    config = client.get_config()
+        metrics = (
+            MetricConfig("solar_production", "solar_production_kwh", args.solar_stat),
+            MetricConfig("house_consumption", "house_consumption_kwh", args.consumption_stat),
+            MetricConfig("grid_import", "grid_import_kwh", args.grid_import_stat),
+            MetricConfig("grid_export", "grid_export_kwh", args.grid_export_stat),
+        )
 
-    timezone_name = config.get("time_zone", "UTC")
-    try:
-        tz = ZoneInfo(timezone_name)
-    except Exception:
-        tz = ZoneInfo("UTC")
+        client = HomeAssistantClient(args.base_url, args.token)
+        config = client.get_config()
 
-    today_local = datetime.now(tz).date()
-    end_date = today_local - timedelta(days=1)
+        timezone_name = config.get("time_zone", "UTC")
+        try:
+            tz = ZoneInfo(timezone_name)
+        except Exception:
+            tz = ZoneInfo("UTC")
 
-    with sqlite3.connect(args.db_path) as conn:
-        latest_in_db = get_latest_date(conn, table_name)
+        today_local = datetime.now(tz).date()
+        end_date = today_local - timedelta(days=1)
 
-        if args.start is not None:
-            effective_start = args.start
-            start_reason = "--start"
-        elif latest_in_db is not None:
-            effective_start = latest_in_db + timedelta(days=1)
-            start_reason = "db_max_plus_one"
-        else:
-            effective_start = env_start
-            start_reason = "env_default"
+        with sqlite3.connect(args.db_path) as conn:
+            latest_in_db = get_latest_date(conn, table_name)
 
-        if effective_start > end_date:
-            print(
-                f"No sync needed: start date {effective_start.isoformat()} is after previous day {end_date.isoformat()}.",
-                file=sys.stderr,
-            )
-            return 0
+            if args.start is not None:
+                effective_start = args.start
+                start_reason = "--start"
+            elif latest_in_db is not None:
+                effective_start = latest_in_db + timedelta(days=1)
+                start_reason = "db_max_plus_one"
+            else:
+                effective_start = env_start
+                start_reason = "env_default"
 
-        stats = client.get_daily_changes([m.statistic_id for m in metrics], effective_start, end_date)
-        rows = build_rows(stats, tz, effective_start, end_date, metrics)
+            if effective_start > end_date:
+                print(
+                    f"No sync needed: start date {effective_start.isoformat()} is after previous day {end_date.isoformat()}.",
+                    file=sys.stderr,
+                )
+                ping_healthchecks(healthchecks_url, "")
+                return 0
 
-        ensure_table(conn, table_name)
-        upsert_rows(conn, table_name, rows)
-        conn.commit()
+            stats = client.get_daily_changes([m.statistic_id for m in metrics], effective_start, end_date)
+            rows = build_rows(stats, tz, effective_start, end_date, metrics)
 
-    print(f"Synced {len(rows)} daily rows into {args.db_path} (table: {table_name})")
-    print(f"Date range: {effective_start.isoformat()} -> {end_date.isoformat()} ({timezone_name})")
-    print(f"Start source: {start_reason}")
+            ensure_table(conn, table_name)
+            upsert_rows(conn, table_name, rows)
+            conn.commit()
 
-    missing = [m.statistic_id for m in metrics if not stats.get(m.statistic_id)]
-    if missing:
-        print("Warning: no recorder statistics returned for:", file=sys.stderr)
-        for statistic_id in missing:
-            print(f"  {statistic_id}", file=sys.stderr)
+        print(f"Synced {len(rows)} daily rows into {args.db_path} (table: {table_name})")
+        print(f"Date range: {effective_start.isoformat()} -> {end_date.isoformat()} ({timezone_name})")
+        print(f"Start source: {start_reason}")
 
-    return 0
+        missing = [m.statistic_id for m in metrics if not stats.get(m.statistic_id)]
+        if missing:
+            print("Warning: no recorder statistics returned for:", file=sys.stderr)
+            for statistic_id in missing:
+                print(f"  {statistic_id}", file=sys.stderr)
+
+        ping_healthchecks(healthchecks_url, "")
+        return 0
+    except Exception as exc:
+        print(f"Sync failed: {exc}", file=sys.stderr)
+        ping_healthchecks(healthchecks_url, "/fail")
+        return 1
 
 
 if __name__ == "__main__":
