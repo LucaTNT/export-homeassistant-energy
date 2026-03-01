@@ -1,6 +1,7 @@
-FROM python:3.12-slim
+FROM python:3.12-alpine
 
 ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
     RUN_ON_STARTUP=0 \
     SYNC_HOUR=1 \
     SYNC_MINUTE=0 \
@@ -8,21 +9,20 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl \
-    && rm -rf /var/lib/apt/lists/*
+RUN apk add --no-cache curl ca-certificates
 
-RUN useradd --create-home --uid 10001 --shell /usr/sbin/nologin appuser
+RUN addgroup -S appgroup \
+    && adduser -S -D -H -u 10001 -G appgroup appuser
 
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY export_energy_to_excel.py sync_energy_to_sqlite.py README.md .env.example ./
+COPY export_energy_to_excel.py sync_energy_to_sqlite.py ./
 COPY docker-scripts/ /app/docker-scripts/
 RUN chmod +x /app/docker-scripts/docker-entrypoint.sh /app/docker-scripts/run_sync.sh /app/docker-scripts/scheduler_loop.py
 
 RUN mkdir -p /data \
-    && chown -R appuser:appuser /app /data
+    && chown -R appuser:appgroup /app /data
 
 VOLUME ["/data"]
 

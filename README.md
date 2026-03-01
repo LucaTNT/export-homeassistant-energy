@@ -112,6 +112,8 @@ Example cron (daily at 01:15):
 
 ## Docker (Daily Sync at 01:00)
 
+The Docker image is Alpine-based (`python:3.12-alpine`) to keep size lower.
+
 Build image:
 
 ```bash
