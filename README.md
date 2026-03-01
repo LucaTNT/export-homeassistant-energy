@@ -102,3 +102,30 @@ Example cron (daily at 01:15):
 ```bash
 15 1 * * * cd /path/to/export-homeassistant-energy && /path/to/export-homeassistant-energy/.venv/bin/python sync_energy_to_sqlite.py >> sync.log 2>&1
 ```
+
+## Docker (Daily Sync at 01:00)
+
+Build image:
+
+```bash
+docker build -t ha-energy-sync .
+```
+
+Run container (non-root, sync every day at 01:00):
+
+```bash
+docker run -d \
+  --name ha-energy-sync \
+  --restart unless-stopped \
+  --env-file .env \
+  -v $(pwd)/data:/data \
+  ha-energy-sync
+```
+
+Notes:
+
+- Container runs as unprivileged user `appuser` (uid `10001`).
+- Default schedule is daily at `01:00`. Override with `-e SYNC_HOUR=2 -e SYNC_MINUTE=30`.
+- SQLite DB defaults to `/data/energy_daily.sqlite` in container (`ENERGY_SQLITE_DB`).
+- Use `-e RUN_ON_STARTUP=1` to execute one sync immediately when container starts.
+- Logs: `docker logs ha-energy-sync`.
