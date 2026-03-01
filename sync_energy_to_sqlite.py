@@ -60,13 +60,25 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def ping_healthchecks(base_url: str | None, suffix: str) -> None:
+def ping_healthchecks(base_url: str | None, suffix: str, body: str = "") -> None:
     if not base_url:
         return
 
     url = base_url.rstrip("/") + suffix
-    cmd = ["curl", "-fsS", "--max-time", "10", "-o", "/dev/null", url]
-    proc = subprocess.run(cmd, check=False, capture_output=True, text=True)
+    cmd = [
+        "curl",
+        "-fsS",
+        "--max-time",
+        "10",
+        "-X",
+        "POST",
+        "--data-binary",
+        "@-",
+        "-o",
+        "/dev/null",
+        url,
+    ]
+    proc = subprocess.run(cmd, input=body, check=False, capture_output=True, text=True)
     if proc.returncode != 0:
         print(f"Warning: healthcheck ping failed for {url}: {proc.stderr.strip()}", file=sys.stderr)
 
@@ -143,30 +155,36 @@ def main() -> int:
     load_dotenv()
     args = parse_args()
     healthchecks_url = args.healthchecks_url
-    ping_healthchecks(healthchecks_url, "/start")
+    run_log: list[str] = []
+
+    def log(message: str, *, err: bool = False) -> None:
+        run_log.append(message)
+        print(message, file=sys.stderr if err else sys.stdout)
+
+    ping_healthchecks(healthchecks_url, "/start", "sync started")
 
     try:
         if not args.base_url:
-            print("Missing Home Assistant URL. Set --base-url or HASS_URL.", file=sys.stderr)
-            ping_healthchecks(healthchecks_url, "/fail")
+            log("Missing Home Assistant URL. Set --base-url or HASS_URL.", err=True)
+            ping_healthchecks(healthchecks_url, "/fail", "\n".join(run_log))
             return 2
         if not args.token:
-            print("Missing Home Assistant token. Set --token or HASS_TOKEN.", file=sys.stderr)
-            ping_healthchecks(healthchecks_url, "/fail")
+            log("Missing Home Assistant token. Set --token or HASS_TOKEN.", err=True)
+            ping_healthchecks(healthchecks_url, "/fail", "\n".join(run_log))
             return 2
 
         try:
             table_name = validate_table_name(args.table)
         except ValueError as exc:
-            print(str(exc), file=sys.stderr)
-            ping_healthchecks(healthchecks_url, "/fail")
+            log(str(exc), err=True)
+            ping_healthchecks(healthchecks_url, "/fail", "\n".join(run_log))
             return 2
 
         try:
             env_start = parse_day(os.getenv("ENERGY_SYNC_START_DATE", "2024-01-01"))
         except argparse.ArgumentTypeError as exc:
-            print(f"Invalid ENERGY_SYNC_START_DATE: {exc}", file=sys.stderr)
-            ping_healthchecks(healthchecks_url, "/fail")
+            log(f"Invalid ENERGY_SYNC_START_DATE: {exc}", err=True)
+            ping_healthchecks(healthchecks_url, "/fail", "\n".join(run_log))
             return 2
 
         metrics = (
@@ -202,11 +220,11 @@ def main() -> int:
                 start_reason = "env_default"
 
             if effective_start > end_date:
-                print(
+                log(
                     f"No sync needed: start date {effective_start.isoformat()} is after previous day {end_date.isoformat()}.",
-                    file=sys.stderr,
+                    err=True,
                 )
-                ping_healthchecks(healthchecks_url, "")
+                ping_healthchecks(healthchecks_url, "", "\n".join(run_log))
                 return 0
 
             stats = client.get_daily_changes([m.statistic_id for m in metrics], effective_start, end_date)
@@ -216,21 +234,21 @@ def main() -> int:
             upsert_rows(conn, table_name, rows)
             conn.commit()
 
-        print(f"Synced {len(rows)} daily rows into {args.db_path} (table: {table_name})")
-        print(f"Date range: {effective_start.isoformat()} -> {end_date.isoformat()} ({timezone_name})")
-        print(f"Start source: {start_reason}")
+        log(f"Synced {len(rows)} daily rows into {args.db_path} (table: {table_name})")
+        log(f"Date range: {effective_start.isoformat()} -> {end_date.isoformat()} ({timezone_name})")
+        log(f"Start source: {start_reason}")
 
         missing = [m.statistic_id for m in metrics if not stats.get(m.statistic_id)]
         if missing:
-            print("Warning: no recorder statistics returned for:", file=sys.stderr)
+            log("Warning: no recorder statistics returned for:", err=True)
             for statistic_id in missing:
-                print(f"  {statistic_id}", file=sys.stderr)
+                log(f"  {statistic_id}", err=True)
 
-        ping_healthchecks(healthchecks_url, "")
+        ping_healthchecks(healthchecks_url, "", "\n".join(run_log))
         return 0
     except Exception as exc:
-        print(f"Sync failed: {exc}", file=sys.stderr)
-        ping_healthchecks(healthchecks_url, "/fail")
+        log(f"Sync failed: {exc}", err=True)
+        ping_healthchecks(healthchecks_url, "/fail", "\n".join(run_log))
         return 1
 
 

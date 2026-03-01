@@ -101,8 +101,8 @@ SQLite schema columns match the Excel export:
 Healthchecks behavior (when `HEALTHCHECKS_PING_URL` is set):
 
 - Sends `<url>/start` at sync start.
-- Sends `<url>` on success.
-- Sends `<url>/fail` on failure.
+- Sends `<url>` on success with script output in the request body.
+- Sends `<url>/fail` on failure with script output in the request body.
 
 Example cron (daily at 01:15):
 
