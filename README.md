@@ -7,6 +7,7 @@ Exports day-by-day energy data from Home Assistant into an `.xlsx` file with:
 - `self_consumed_kwh`
 - `grid_import_kwh`
 - `grid_export_kwh`
+- `peak`
 
 `self_consumed_kwh` is computed as:
 
@@ -46,6 +47,7 @@ Default statistic IDs (already set in the script):
 - House consumption: `sensor.consumo_casa_total_energy`
 - Grid import: `sensor.power_meter_consumption`
 - Grid export: `sensor.power_meter_exported`
+- Peak: `sensor.inverter_day_active_power_peak`
 
 Override them if needed:
 
@@ -54,7 +56,8 @@ python3 export_energy_to_excel.py \
   --solar-stat sensor.some_other_solar_total \
   --consumption-stat sensor.some_house_total \
   --grid-import-stat sensor.grid_import_total \
-  --grid-export-stat sensor.grid_export_total
+  --grid-export-stat sensor.grid_export_total \
+  --peak-stat sensor.inverter_day_active_power_peak
 ```
 
 ## Scheduled SQLite Sync
@@ -97,6 +100,7 @@ SQLite schema columns match the Excel export:
 - `self_consumed_kwh`
 - `grid_import_kwh`
 - `grid_export_kwh`
+- `peak`
 
 Healthchecks behavior (when `HEALTHCHECKS_PING_URL` is set):
 

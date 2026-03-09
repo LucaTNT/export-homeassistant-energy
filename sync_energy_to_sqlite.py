@@ -17,6 +17,7 @@ from export_energy_to_excel import (
     HomeAssistantClient,
     MetricConfig,
     build_rows,
+    collect_metric_data,
     load_dotenv,
     parse_day,
 )
@@ -56,6 +57,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--grid-import-stat", default=DEFAULT_METRICS[2].statistic_id, help="Statistic ID for grid import")
     parser.add_argument("--grid-export-stat", default=DEFAULT_METRICS[3].statistic_id, help="Statistic ID for grid export")
+    parser.add_argument("--peak-stat", default=DEFAULT_METRICS[4].statistic_id, help="Statistic ID for daily peak")
 
     return parser.parse_args()
 
@@ -98,10 +100,14 @@ def ensure_table(conn: sqlite3.Connection, table: str) -> None:
             house_consumption_kwh REAL NOT NULL,
             self_consumed_kwh REAL NOT NULL,
             grid_import_kwh REAL NOT NULL,
-            grid_export_kwh REAL NOT NULL
+            grid_export_kwh REAL NOT NULL,
+            peak REAL NOT NULL DEFAULT 0
         )
         """
     )
+    columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+    if "peak" not in columns:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN peak REAL NOT NULL DEFAULT 0")
 
 
 def get_latest_date(conn: sqlite3.Connection, table: str) -> date | None:
@@ -128,14 +134,16 @@ def upsert_rows(conn: sqlite3.Connection, table: str, rows: list[dict]) -> None:
             house_consumption_kwh,
             self_consumed_kwh,
             grid_import_kwh,
-            grid_export_kwh
-        ) VALUES (?, ?, ?, ?, ?, ?)
+            grid_export_kwh,
+            peak
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(date) DO UPDATE SET
             solar_production_kwh = excluded.solar_production_kwh,
             house_consumption_kwh = excluded.house_consumption_kwh,
             self_consumed_kwh = excluded.self_consumed_kwh,
             grid_import_kwh = excluded.grid_import_kwh,
-            grid_export_kwh = excluded.grid_export_kwh
+            grid_export_kwh = excluded.grid_export_kwh,
+            peak = excluded.peak
         """,
         [
             (
@@ -145,6 +153,7 @@ def upsert_rows(conn: sqlite3.Connection, table: str, rows: list[dict]) -> None:
                 row["self_consumed_kwh"],
                 row["grid_import_kwh"],
                 row["grid_export_kwh"],
+                row["peak"],
             )
             for row in rows
         ],
@@ -188,10 +197,11 @@ def main() -> int:
             return 2
 
         metrics = (
-            MetricConfig("solar_production", "solar_production_kwh", args.solar_stat),
-            MetricConfig("house_consumption", "house_consumption_kwh", args.consumption_stat),
-            MetricConfig("grid_import", "grid_import_kwh", args.grid_import_stat),
-            MetricConfig("grid_export", "grid_export_kwh", args.grid_export_stat),
+            MetricConfig("solar_production", "solar_production_kwh", args.solar_stat, "change"),
+            MetricConfig("house_consumption", "house_consumption_kwh", args.consumption_stat, "change"),
+            MetricConfig("grid_import", "grid_import_kwh", args.grid_import_stat, "change"),
+            MetricConfig("grid_export", "grid_export_kwh", args.grid_export_stat, "change"),
+            MetricConfig("peak", "peak", args.peak_stat, "history_last"),
         )
 
         client = HomeAssistantClient(args.base_url, args.token)
@@ -227,7 +237,7 @@ def main() -> int:
                 ping_healthchecks(healthchecks_url, "", "\n".join(run_log))
                 return 0
 
-            stats = client.get_daily_changes([m.statistic_id for m in metrics], effective_start, end_date)
+            stats = collect_metric_data(client, metrics, tz, effective_start, end_date)
             rows = build_rows(stats, tz, effective_start, end_date, metrics)
 
             ensure_table(conn, table_name)

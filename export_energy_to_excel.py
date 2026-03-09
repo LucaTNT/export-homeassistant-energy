@@ -11,6 +11,7 @@ import sys
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from typing import Dict, Iterable
+from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 
 from openpyxl import Workbook
@@ -38,13 +39,16 @@ class MetricConfig:
     key: str
     column: str
     statistic_id: str
+    stat_type: str
+    scale: float = 1.0
 
 
 DEFAULT_METRICS = (
-    MetricConfig("solar_production", "solar_production_kwh", "sensor.inverter_total_yield"),
-    MetricConfig("house_consumption", "house_consumption_kwh", "sensor.consumo_casa_total_energy"),
-    MetricConfig("grid_import", "grid_import_kwh", "sensor.power_meter_consumption"),
-    MetricConfig("grid_export", "grid_export_kwh", "sensor.power_meter_exported"),
+    MetricConfig("solar_production", "solar_production_kwh", "sensor.inverter_total_yield", "change", 1.0),
+    MetricConfig("house_consumption", "house_consumption_kwh", "sensor.consumo_casa_total_energy", "change", 1.0),
+    MetricConfig("grid_import", "grid_import_kwh", "sensor.power_meter_consumption", "change", 1.0),
+    MetricConfig("grid_export", "grid_export_kwh", "sensor.power_meter_exported", "change", 1.0),
+    MetricConfig("peak", "peak", "sensor.inverter_day_active_power_peak", "history_last", 1.0),
 )
 
 
@@ -106,6 +110,7 @@ class HomeAssistantClient:
         statistic_ids: Iterable[str],
         start_date: date,
         end_date: date,
+        types: Iterable[str],
     ) -> dict:
         # Recorder's end_time is exclusive, so query until midnight of the day after end_date.
         end_exclusive = end_date + timedelta(days=1)
@@ -114,7 +119,7 @@ class HomeAssistantClient:
             "end_time": datetime.combine(end_exclusive, time.min).strftime("%Y-%m-%d %H:%M:%S"),
             "statistic_ids": list(statistic_ids),
             "period": "day",
-            "types": ["change"],
+            "types": list(types),
         }
         response = self._request("/api/services/recorder/get_statistics?return_response", payload)
 
@@ -122,6 +127,53 @@ class HomeAssistantClient:
             return response["service_response"]["statistics"]
         except (KeyError, TypeError) as exc:
             raise RuntimeError(f"Unexpected recorder response format: {response}") from exc
+
+    def get_daily_history_last(
+        self,
+        entity_id: str,
+        start_date: date,
+        end_date: date,
+        tz: ZoneInfo,
+    ) -> Dict[date, float]:
+        end_exclusive = end_date + timedelta(days=1)
+        start_dt = datetime.combine(start_date, time.min, tz)
+        end_dt = datetime.combine(end_exclusive, time.min, tz)
+        query = urlencode(
+            {
+                "filter_entity_id": entity_id,
+                "end_time": end_dt.isoformat(),
+                "minimal_response": "true",
+                "no_attributes": "true",
+            }
+        )
+        path = f"/api/history/period/{start_dt.isoformat()}?{query}"
+        response = self._request(path)
+        if not isinstance(response, list) or not response:
+            return {}
+
+        states = response[0]
+        if not isinstance(states, list):
+            return {}
+
+        day_values: Dict[date, float] = {}
+        for item in states:
+            if not isinstance(item, dict):
+                continue
+            ts = item.get("last_updated") or item.get("last_changed")
+            raw_state = item.get("state")
+            if ts is None or raw_state in (None, "unknown", "unavailable"):
+                continue
+            try:
+                dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+                value = float(raw_state)
+            except (ValueError, TypeError):
+                continue
+
+            local_day = dt.astimezone(tz).date()
+            if start_date <= local_day <= end_date:
+                day_values[local_day] = value
+
+        return day_values
 
 
 def parse_day(value: str) -> date:
@@ -142,17 +194,24 @@ def build_rows(
 
     for metric in metrics:
         day_values: Dict[date, float] = {}
-        for row in stats.get(metric.statistic_id, []):
-            raw_start = row.get("start")
-            if raw_start is None:
-                continue
+        raw_metric_values = stats.get(metric.statistic_id, [])
+        if metric.stat_type == "history_last":
+            if isinstance(raw_metric_values, dict):
+                for local_day, value in raw_metric_values.items():
+                    if start_date <= local_day <= end_date:
+                        day_values[local_day] = float(value) / metric.scale
+        else:
+            for row in raw_metric_values:
+                raw_start = row.get("start")
+                if raw_start is None:
+                    continue
 
-            start_dt = datetime.fromisoformat(raw_start)
-            local_day = start_dt.astimezone(tz).date()
-            if not (start_date <= local_day <= end_date):
-                continue
+                start_dt = datetime.fromisoformat(raw_start)
+                local_day = start_dt.astimezone(tz).date()
+                if not (start_date <= local_day <= end_date):
+                    continue
 
-            day_values[local_day] = float(row.get("change") or 0.0)
+                day_values[local_day] = float(row.get(metric.stat_type) or 0.0) / metric.scale
 
         per_metric[metric.key] = day_values
 
@@ -163,6 +222,7 @@ def build_rows(
         house = per_metric["house_consumption"].get(day, 0.0)
         grid_import = per_metric["grid_import"].get(day, 0.0)
         grid_export = per_metric["grid_export"].get(day, 0.0)
+        peak = per_metric["peak"].get(day, 0.0)
         self_consumed = max(solar - grid_export, 0.0)
 
         rows.append(
@@ -173,6 +233,7 @@ def build_rows(
                 "self_consumed_kwh": round(self_consumed, 3),
                 "grid_import_kwh": round(grid_import, 3),
                 "grid_export_kwh": round(grid_export, 3),
+                "peak": round(peak, 3),
             }
         )
         day += timedelta(days=1)
@@ -192,6 +253,7 @@ def write_excel(rows: list[dict], output_path: str) -> None:
         "self_consumed_kwh",
         "grid_import_kwh",
         "grid_export_kwh",
+        "peak",
     ]
     ws.append(headers)
 
@@ -203,10 +265,42 @@ def write_excel(rows: list[dict], output_path: str) -> None:
         cell.font = bold
         cell.alignment = Alignment(horizontal="center")
 
-    for idx, width in enumerate((14, 22, 24, 20, 18, 18), start=1):
+    for idx, width in enumerate((14, 22, 24, 20, 18, 18, 12), start=1):
         ws.column_dimensions[chr(64 + idx)].width = width
 
     wb.save(output_path)
+
+
+def collect_metric_data(
+    client: HomeAssistantClient,
+    metrics: Iterable[MetricConfig],
+    tz: ZoneInfo,
+    start_date: date,
+    end_date: date,
+) -> dict:
+    metrics = list(metrics)
+    stats: dict = {}
+
+    recorder_metrics = [m for m in metrics if m.stat_type != "history_last"]
+    if recorder_metrics:
+        recorder_stats = client.get_daily_changes(
+            [m.statistic_id for m in recorder_metrics],
+            start_date,
+            end_date,
+            sorted({m.stat_type for m in recorder_metrics}),
+        )
+        stats.update(recorder_stats)
+
+    history_metrics = [m for m in metrics if m.stat_type == "history_last"]
+    for metric in history_metrics:
+        stats[metric.statistic_id] = client.get_daily_history_last(
+            metric.statistic_id,
+            start_date,
+            end_date,
+            tz,
+        )
+
+    return stats
 
 
 def parse_args() -> argparse.Namespace:
@@ -225,6 +319,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--grid-import-stat", default=DEFAULT_METRICS[2].statistic_id, help="Statistic ID for grid import")
     parser.add_argument("--grid-export-stat", default=DEFAULT_METRICS[3].statistic_id, help="Statistic ID for grid export")
+    parser.add_argument("--peak-stat", default=DEFAULT_METRICS[4].statistic_id, help="Statistic ID for daily peak")
 
     return parser.parse_args()
 
@@ -244,10 +339,11 @@ def main() -> int:
         return 2
 
     metrics = (
-        MetricConfig("solar_production", "solar_production_kwh", args.solar_stat),
-        MetricConfig("house_consumption", "house_consumption_kwh", args.consumption_stat),
-        MetricConfig("grid_import", "grid_import_kwh", args.grid_import_stat),
-        MetricConfig("grid_export", "grid_export_kwh", args.grid_export_stat),
+        MetricConfig("solar_production", "solar_production_kwh", args.solar_stat, "change", 1.0),
+        MetricConfig("house_consumption", "house_consumption_kwh", args.consumption_stat, "change", 1.0),
+        MetricConfig("grid_import", "grid_import_kwh", args.grid_import_stat, "change", 1.0),
+        MetricConfig("grid_export", "grid_export_kwh", args.grid_export_stat, "change", 1.0),
+        MetricConfig("peak", "peak", args.peak_stat, "history_last", 1.0),
     )
 
     client = HomeAssistantClient(args.base_url, args.token)
@@ -259,7 +355,7 @@ def main() -> int:
     except Exception:
         tz = ZoneInfo("UTC")
 
-    stats = client.get_daily_changes([m.statistic_id for m in metrics], args.start, args.end)
+    stats = collect_metric_data(client, metrics, tz, args.start, args.end)
     rows = build_rows(stats, tz, args.start, args.end, metrics)
     write_excel(rows, args.output)
 
