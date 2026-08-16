@@ -13,14 +13,19 @@ from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from export_energy_to_excel import (
-    DEFAULT_METRICS,
+    COLUMNS,
     HomeAssistantClient,
-    MetricConfig,
+    build_metrics,
     build_rows,
     collect_metric_data,
+    default_stat,
     load_dotenv,
     parse_day,
 )
+
+# Column definitions for the SQLite table, in order. Used for both CREATE TABLE
+# and the ALTER TABLE migration of existing databases.
+COLUMN_DEFS = {column: "REAL NOT NULL DEFAULT 0" for column in COLUMNS if column != "date"}
 
 
 def parse_args() -> argparse.Namespace:
@@ -49,15 +54,18 @@ def parse_args() -> argparse.Namespace:
         help="Optional base ping URL (for example https://hc-ping.com/<uuid>)",
     )
 
-    parser.add_argument("--solar-stat", default=DEFAULT_METRICS[0].statistic_id, help="Statistic ID for solar production")
+    parser.add_argument("--solar-stat", default=default_stat("solar_production"), help="Statistic ID for solar production")
     parser.add_argument(
         "--consumption-stat",
-        default=DEFAULT_METRICS[1].statistic_id,
+        default=default_stat("house_consumption"),
         help="Statistic ID for total house consumption",
     )
-    parser.add_argument("--grid-import-stat", default=DEFAULT_METRICS[2].statistic_id, help="Statistic ID for grid import")
-    parser.add_argument("--grid-export-stat", default=DEFAULT_METRICS[3].statistic_id, help="Statistic ID for grid export")
-    parser.add_argument("--peak-stat", default=DEFAULT_METRICS[4].statistic_id, help="Statistic ID for daily peak")
+    parser.add_argument("--grid-import-stat", default=default_stat("grid_import"), help="Statistic ID for grid import")
+    parser.add_argument("--grid-export-stat", default=default_stat("grid_export"), help="Statistic ID for grid export")
+    parser.add_argument("--peak-stat", default=default_stat("peak"), help="Statistic ID for daily peak")
+    parser.add_argument("--import-f1-stat", default=default_stat("import_f1"), help="Statistic ID for F1 tariff import")
+    parser.add_argument("--import-f2-stat", default=default_stat("import_f2"), help="Statistic ID for F2 tariff import")
+    parser.add_argument("--import-f3-stat", default=default_stat("import_f3"), help="Statistic ID for F3 tariff import")
 
     return parser.parse_args()
 
@@ -92,22 +100,19 @@ def validate_table_name(name: str) -> str:
 
 
 def ensure_table(conn: sqlite3.Connection, table: str) -> None:
+    column_sql = ",\n            ".join(f"{name} {definition}" for name, definition in COLUMN_DEFS.items())
     conn.execute(
         f"""
         CREATE TABLE IF NOT EXISTS {table} (
             date TEXT PRIMARY KEY,
-            solar_production_kwh REAL NOT NULL,
-            house_consumption_kwh REAL NOT NULL,
-            self_consumed_kwh REAL NOT NULL,
-            grid_import_kwh REAL NOT NULL,
-            grid_export_kwh REAL NOT NULL,
-            peak REAL NOT NULL DEFAULT 0
+            {column_sql}
         )
         """
     )
-    columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
-    if "peak" not in columns:
-        conn.execute(f"ALTER TABLE {table} ADD COLUMN peak REAL NOT NULL DEFAULT 0")
+    existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+    for name, definition in COLUMN_DEFS.items():
+        if name not in existing:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
 
 
 def get_latest_date(conn: sqlite3.Connection, table: str) -> date | None:
@@ -126,37 +131,16 @@ def get_latest_date(conn: sqlite3.Connection, table: str) -> date | None:
 
 
 def upsert_rows(conn: sqlite3.Connection, table: str, rows: list[dict]) -> None:
+    placeholders = ", ".join("?" for _ in COLUMNS)
+    updates = ",\n            ".join(f"{name} = excluded.{name}" for name in COLUMN_DEFS)
     conn.executemany(
         f"""
-        INSERT INTO {table} (
-            date,
-            solar_production_kwh,
-            house_consumption_kwh,
-            self_consumed_kwh,
-            grid_import_kwh,
-            grid_export_kwh,
-            peak
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO {table} ({", ".join(COLUMNS)})
+        VALUES ({placeholders})
         ON CONFLICT(date) DO UPDATE SET
-            solar_production_kwh = excluded.solar_production_kwh,
-            house_consumption_kwh = excluded.house_consumption_kwh,
-            self_consumed_kwh = excluded.self_consumed_kwh,
-            grid_import_kwh = excluded.grid_import_kwh,
-            grid_export_kwh = excluded.grid_export_kwh,
-            peak = excluded.peak
+            {updates}
         """,
-        [
-            (
-                row["date"],
-                row["solar_production_kwh"],
-                row["house_consumption_kwh"],
-                row["self_consumed_kwh"],
-                row["grid_import_kwh"],
-                row["grid_export_kwh"],
-                row["peak"],
-            )
-            for row in rows
-        ],
+        [tuple(row[name] for name in COLUMNS) for row in rows],
     )
 
 
@@ -196,13 +180,7 @@ def main() -> int:
             ping_healthchecks(healthchecks_url, "/fail", "\n".join(run_log))
             return 2
 
-        metrics = (
-            MetricConfig("solar_production", "solar_production_kwh", args.solar_stat, "change"),
-            MetricConfig("house_consumption", "house_consumption_kwh", args.consumption_stat, "change"),
-            MetricConfig("grid_import", "grid_import_kwh", args.grid_import_stat, "change"),
-            MetricConfig("grid_export", "grid_export_kwh", args.grid_export_stat, "change"),
-            MetricConfig("peak", "peak", args.peak_stat, "history_last"),
-        )
+        metrics = build_metrics(args)
 
         client = HomeAssistantClient(args.base_url, args.token)
         config = client.get_config()

@@ -8,6 +8,11 @@ Exports day-by-day energy data from Home Assistant into an `.xlsx` file with:
 - `grid_import_kwh`
 - `grid_export_kwh`
 - `peak`
+- `import_energy_kwh_f1`
+- `import_energy_kwh_f2`
+- `import_energy_kwh_f3`
+
+`import_energy_kwh_f1/f2/f3` split grid import by Italian time-of-use tariff band (fascia); their sum equals `grid_import_kwh`.
 
 `self_consumed_kwh` is computed as:
 
@@ -48,6 +53,9 @@ Default statistic IDs (already set in the script):
 - Grid import: `sensor.power_meter_consumption`
 - Grid export: `sensor.power_meter_exported`
 - Peak: `sensor.inverter_day_active_power_peak`
+- Import F1: `sensor.energia_giornaliera_casa_fascia_f1`
+- Import F2: `sensor.energia_giornaliera_casa_fascia_f2`
+- Import F3: `sensor.energia_giornaliera_casa_fascia_f3`
 
 Override them if needed:
 
@@ -57,7 +65,10 @@ python3 export_energy_to_excel.py \
   --consumption-stat sensor.some_house_total \
   --grid-import-stat sensor.grid_import_total \
   --grid-export-stat sensor.grid_export_total \
-  --peak-stat sensor.inverter_day_active_power_peak
+  --peak-stat sensor.inverter_day_active_power_peak \
+  --import-f1-stat sensor.energia_giornaliera_casa_fascia_f1 \
+  --import-f2-stat sensor.energia_giornaliera_casa_fascia_f2 \
+  --import-f3-stat sensor.energia_giornaliera_casa_fascia_f3
 ```
 
 ## Scheduled SQLite Sync
@@ -101,6 +112,19 @@ SQLite schema columns match the Excel export:
 - `grid_import_kwh`
 - `grid_export_kwh`
 - `peak`
+- `import_energy_kwh_f1`
+- `import_energy_kwh_f2`
+- `import_energy_kwh_f3`
+
+### Schema migrations
+
+`ensure_table()` adds any missing columns with `ALTER TABLE ... ADD COLUMN` on every run, so an existing long-running database is upgraded in place on the next sync — no manual step, no data loss.
+
+New columns default to `0` for rows that already exist. Backfill historical days with a one-off run over the range you care about (rows are upserted, so existing values are refreshed rather than duplicated):
+
+```bash
+python3 sync_energy_to_sqlite.py --start 2025-10-23
+```
 
 Healthchecks behavior (when `HEALTHCHECKS_PING_URL` is set):
 

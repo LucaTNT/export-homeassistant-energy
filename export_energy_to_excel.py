@@ -49,7 +49,30 @@ DEFAULT_METRICS = (
     MetricConfig("grid_import", "grid_import_kwh", "sensor.power_meter_consumption", "change", 1.0),
     MetricConfig("grid_export", "grid_export_kwh", "sensor.power_meter_exported", "change", 1.0),
     MetricConfig("peak", "peak", "sensor.inverter_day_active_power_peak", "history_last", 1.0),
+    MetricConfig("import_f1", "import_energy_kwh_f1", "sensor.energia_giornaliera_casa_fascia_f1", "change", 1.0),
+    MetricConfig("import_f2", "import_energy_kwh_f2", "sensor.energia_giornaliera_casa_fascia_f2", "change", 1.0),
+    MetricConfig("import_f3", "import_energy_kwh_f3", "sensor.energia_giornaliera_casa_fascia_f3", "change", 1.0),
 )
+
+DEFAULT_METRICS_BY_KEY = {metric.key: metric for metric in DEFAULT_METRICS}
+
+# Ordered output columns. New columns are appended so existing exports/DBs stay compatible.
+COLUMNS = (
+    "date",
+    "solar_production_kwh",
+    "house_consumption_kwh",
+    "self_consumed_kwh",
+    "grid_import_kwh",
+    "grid_export_kwh",
+    "peak",
+    "import_energy_kwh_f1",
+    "import_energy_kwh_f2",
+    "import_energy_kwh_f3",
+)
+
+
+def default_stat(key: str) -> str:
+    return DEFAULT_METRICS_BY_KEY[key].statistic_id
 
 
 class HomeAssistantClient:
@@ -234,6 +257,9 @@ def build_rows(
                 "grid_import_kwh": round(grid_import, 3),
                 "grid_export_kwh": round(grid_export, 3),
                 "peak": round(peak, 3),
+                "import_energy_kwh_f1": round(per_metric["import_f1"].get(day, 0.0), 3),
+                "import_energy_kwh_f2": round(per_metric["import_f2"].get(day, 0.0), 3),
+                "import_energy_kwh_f3": round(per_metric["import_f3"].get(day, 0.0), 3),
             }
         )
         day += timedelta(days=1)
@@ -246,15 +272,7 @@ def write_excel(rows: list[dict], output_path: str) -> None:
     ws = wb.active
     ws.title = "daily_energy"
 
-    headers = [
-        "date",
-        "solar_production_kwh",
-        "house_consumption_kwh",
-        "self_consumed_kwh",
-        "grid_import_kwh",
-        "grid_export_kwh",
-        "peak",
-    ]
+    headers = list(COLUMNS)
     ws.append(headers)
 
     for row in rows:
@@ -265,7 +283,7 @@ def write_excel(rows: list[dict], output_path: str) -> None:
         cell.font = bold
         cell.alignment = Alignment(horizontal="center")
 
-    for idx, width in enumerate((14, 22, 24, 20, 18, 18, 12), start=1):
+    for idx, width in enumerate((14, 22, 24, 20, 18, 18, 12, 22, 22, 22), start=1):
         ws.column_dimensions[chr(64 + idx)].width = width
 
     wb.save(output_path)
@@ -311,17 +329,33 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--end", type=parse_day, default=date.today(), help="End date (YYYY-MM-DD)")
     parser.add_argument("--output", default="homeassistant_energy_export.xlsx", help="Output .xlsx path")
 
-    parser.add_argument("--solar-stat", default=DEFAULT_METRICS[0].statistic_id, help="Statistic ID for solar production")
+    parser.add_argument("--solar-stat", default=default_stat("solar_production"), help="Statistic ID for solar production")
     parser.add_argument(
         "--consumption-stat",
-        default=DEFAULT_METRICS[1].statistic_id,
+        default=default_stat("house_consumption"),
         help="Statistic ID for total house consumption",
     )
-    parser.add_argument("--grid-import-stat", default=DEFAULT_METRICS[2].statistic_id, help="Statistic ID for grid import")
-    parser.add_argument("--grid-export-stat", default=DEFAULT_METRICS[3].statistic_id, help="Statistic ID for grid export")
-    parser.add_argument("--peak-stat", default=DEFAULT_METRICS[4].statistic_id, help="Statistic ID for daily peak")
+    parser.add_argument("--grid-import-stat", default=default_stat("grid_import"), help="Statistic ID for grid import")
+    parser.add_argument("--grid-export-stat", default=default_stat("grid_export"), help="Statistic ID for grid export")
+    parser.add_argument("--peak-stat", default=default_stat("peak"), help="Statistic ID for daily peak")
+    parser.add_argument("--import-f1-stat", default=default_stat("import_f1"), help="Statistic ID for F1 tariff import")
+    parser.add_argument("--import-f2-stat", default=default_stat("import_f2"), help="Statistic ID for F2 tariff import")
+    parser.add_argument("--import-f3-stat", default=default_stat("import_f3"), help="Statistic ID for F3 tariff import")
 
     return parser.parse_args()
+
+
+def build_metrics(args: argparse.Namespace) -> tuple[MetricConfig, ...]:
+    return (
+        MetricConfig("solar_production", "solar_production_kwh", args.solar_stat, "change", 1.0),
+        MetricConfig("house_consumption", "house_consumption_kwh", args.consumption_stat, "change", 1.0),
+        MetricConfig("grid_import", "grid_import_kwh", args.grid_import_stat, "change", 1.0),
+        MetricConfig("grid_export", "grid_export_kwh", args.grid_export_stat, "change", 1.0),
+        MetricConfig("peak", "peak", args.peak_stat, "history_last", 1.0),
+        MetricConfig("import_f1", "import_energy_kwh_f1", args.import_f1_stat, "change", 1.0),
+        MetricConfig("import_f2", "import_energy_kwh_f2", args.import_f2_stat, "change", 1.0),
+        MetricConfig("import_f3", "import_energy_kwh_f3", args.import_f3_stat, "change", 1.0),
+    )
 
 
 def main() -> int:
@@ -338,13 +372,7 @@ def main() -> int:
         print("--start must be <= --end.", file=sys.stderr)
         return 2
 
-    metrics = (
-        MetricConfig("solar_production", "solar_production_kwh", args.solar_stat, "change", 1.0),
-        MetricConfig("house_consumption", "house_consumption_kwh", args.consumption_stat, "change", 1.0),
-        MetricConfig("grid_import", "grid_import_kwh", args.grid_import_stat, "change", 1.0),
-        MetricConfig("grid_export", "grid_export_kwh", args.grid_export_stat, "change", 1.0),
-        MetricConfig("peak", "peak", args.peak_stat, "history_last", 1.0),
-    )
+    metrics = build_metrics(args)
 
     client = HomeAssistantClient(args.base_url, args.token)
     config = client.get_config()
