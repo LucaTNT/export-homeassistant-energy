@@ -66,6 +66,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--import-f1-stat", default=default_stat("import_f1"), help="Statistic ID for F1 tariff import")
     parser.add_argument("--import-f2-stat", default=default_stat("import_f2"), help="Statistic ID for F2 tariff import")
     parser.add_argument("--import-f3-stat", default=default_stat("import_f3"), help="Statistic ID for F3 tariff import")
+    parser.add_argument(
+        "--battery-discharge-f1-stat",
+        default=default_stat("battery_discharge_f1"),
+        help="Statistic ID for F1 tariff battery discharge",
+    )
+    parser.add_argument(
+        "--battery-discharge-f2-stat",
+        default=default_stat("battery_discharge_f2"),
+        help="Statistic ID for F2 tariff battery discharge",
+    )
+    parser.add_argument(
+        "--battery-discharge-f3-stat",
+        default=default_stat("battery_discharge_f3"),
+        help="Statistic ID for F3 tariff battery discharge",
+    )
 
     return parser.parse_args()
 

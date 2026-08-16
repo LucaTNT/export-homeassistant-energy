@@ -52,6 +52,27 @@ DEFAULT_METRICS = (
     MetricConfig("import_f1", "import_energy_kwh_f1", "sensor.energia_giornaliera_casa_fascia_f1", "change", 1.0),
     MetricConfig("import_f2", "import_energy_kwh_f2", "sensor.energia_giornaliera_casa_fascia_f2", "change", 1.0),
     MetricConfig("import_f3", "import_energy_kwh_f3", "sensor.energia_giornaliera_casa_fascia_f3", "change", 1.0),
+    MetricConfig(
+        "battery_discharge_f1",
+        "battery_discharge_kwh_f1",
+        "sensor.cantina_marstek_venus_scarica_marstek_fasce_f1",
+        "change",
+        1.0,
+    ),
+    MetricConfig(
+        "battery_discharge_f2",
+        "battery_discharge_kwh_f2",
+        "sensor.cantina_marstek_venus_scarica_marstek_fasce_f2",
+        "change",
+        1.0,
+    ),
+    MetricConfig(
+        "battery_discharge_f3",
+        "battery_discharge_kwh_f3",
+        "sensor.cantina_marstek_venus_scarica_marstek_fasce_f3",
+        "change",
+        1.0,
+    ),
 )
 
 DEFAULT_METRICS_BY_KEY = {metric.key: metric for metric in DEFAULT_METRICS}
@@ -68,6 +89,9 @@ COLUMNS = (
     "import_energy_kwh_f1",
     "import_energy_kwh_f2",
     "import_energy_kwh_f3",
+    "battery_discharge_kwh_f1",
+    "battery_discharge_kwh_f2",
+    "battery_discharge_kwh_f3",
 )
 
 
@@ -260,6 +284,9 @@ def build_rows(
                 "import_energy_kwh_f1": round(per_metric["import_f1"].get(day, 0.0), 3),
                 "import_energy_kwh_f2": round(per_metric["import_f2"].get(day, 0.0), 3),
                 "import_energy_kwh_f3": round(per_metric["import_f3"].get(day, 0.0), 3),
+                "battery_discharge_kwh_f1": round(per_metric["battery_discharge_f1"].get(day, 0.0), 3),
+                "battery_discharge_kwh_f2": round(per_metric["battery_discharge_f2"].get(day, 0.0), 3),
+                "battery_discharge_kwh_f3": round(per_metric["battery_discharge_f3"].get(day, 0.0), 3),
             }
         )
         day += timedelta(days=1)
@@ -283,7 +310,7 @@ def write_excel(rows: list[dict], output_path: str) -> None:
         cell.font = bold
         cell.alignment = Alignment(horizontal="center")
 
-    for idx, width in enumerate((14, 22, 24, 20, 18, 18, 12, 22, 22, 22), start=1):
+    for idx, width in enumerate((14, 22, 24, 20, 18, 18, 12, 22, 22, 22, 24, 24, 24), start=1):
         ws.column_dimensions[chr(64 + idx)].width = width
 
     wb.save(output_path)
@@ -341,6 +368,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--import-f1-stat", default=default_stat("import_f1"), help="Statistic ID for F1 tariff import")
     parser.add_argument("--import-f2-stat", default=default_stat("import_f2"), help="Statistic ID for F2 tariff import")
     parser.add_argument("--import-f3-stat", default=default_stat("import_f3"), help="Statistic ID for F3 tariff import")
+    parser.add_argument(
+        "--battery-discharge-f1-stat",
+        default=default_stat("battery_discharge_f1"),
+        help="Statistic ID for F1 tariff battery discharge",
+    )
+    parser.add_argument(
+        "--battery-discharge-f2-stat",
+        default=default_stat("battery_discharge_f2"),
+        help="Statistic ID for F2 tariff battery discharge",
+    )
+    parser.add_argument(
+        "--battery-discharge-f3-stat",
+        default=default_stat("battery_discharge_f3"),
+        help="Statistic ID for F3 tariff battery discharge",
+    )
 
     return parser.parse_args()
 
@@ -355,6 +397,9 @@ def build_metrics(args: argparse.Namespace) -> tuple[MetricConfig, ...]:
         MetricConfig("import_f1", "import_energy_kwh_f1", args.import_f1_stat, "change", 1.0),
         MetricConfig("import_f2", "import_energy_kwh_f2", args.import_f2_stat, "change", 1.0),
         MetricConfig("import_f3", "import_energy_kwh_f3", args.import_f3_stat, "change", 1.0),
+        MetricConfig("battery_discharge_f1", "battery_discharge_kwh_f1", args.battery_discharge_f1_stat, "change", 1.0),
+        MetricConfig("battery_discharge_f2", "battery_discharge_kwh_f2", args.battery_discharge_f2_stat, "change", 1.0),
+        MetricConfig("battery_discharge_f3", "battery_discharge_kwh_f3", args.battery_discharge_f3_stat, "change", 1.0),
     )
 
 

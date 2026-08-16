@@ -11,8 +11,13 @@ Exports day-by-day energy data from Home Assistant into an `.xlsx` file with:
 - `import_energy_kwh_f1`
 - `import_energy_kwh_f2`
 - `import_energy_kwh_f3`
+- `battery_discharge_kwh_f1`
+- `battery_discharge_kwh_f2`
+- `battery_discharge_kwh_f3`
 
 `import_energy_kwh_f1/f2/f3` split grid import by Italian time-of-use tariff band (fascia); their sum equals `grid_import_kwh`.
+
+`battery_discharge_kwh_f1/f2/f3` split battery discharge by tariff band (fascia).
 
 `self_consumed_kwh` is computed as:
 
@@ -56,6 +61,9 @@ Default statistic IDs (already set in the script):
 - Import F1: `sensor.energia_giornaliera_casa_fascia_f1`
 - Import F2: `sensor.energia_giornaliera_casa_fascia_f2`
 - Import F3: `sensor.energia_giornaliera_casa_fascia_f3`
+- Battery discharge F1: `sensor.cantina_marstek_venus_scarica_marstek_fasce_f1`
+- Battery discharge F2: `sensor.cantina_marstek_venus_scarica_marstek_fasce_f2`
+- Battery discharge F3: `sensor.cantina_marstek_venus_scarica_marstek_fasce_f3`
 
 Override them if needed:
 
@@ -68,7 +76,10 @@ python3 export_energy_to_excel.py \
   --peak-stat sensor.inverter_day_active_power_peak \
   --import-f1-stat sensor.energia_giornaliera_casa_fascia_f1 \
   --import-f2-stat sensor.energia_giornaliera_casa_fascia_f2 \
-  --import-f3-stat sensor.energia_giornaliera_casa_fascia_f3
+  --import-f3-stat sensor.energia_giornaliera_casa_fascia_f3 \
+  --battery-discharge-f1-stat sensor.cantina_marstek_venus_scarica_marstek_fasce_f1 \
+  --battery-discharge-f2-stat sensor.cantina_marstek_venus_scarica_marstek_fasce_f2 \
+  --battery-discharge-f3-stat sensor.cantina_marstek_venus_scarica_marstek_fasce_f3
 ```
 
 ## Scheduled SQLite Sync
@@ -115,6 +126,9 @@ SQLite schema columns match the Excel export:
 - `import_energy_kwh_f1`
 - `import_energy_kwh_f2`
 - `import_energy_kwh_f3`
+- `battery_discharge_kwh_f1`
+- `battery_discharge_kwh_f2`
+- `battery_discharge_kwh_f3`
 
 ### Schema migrations
 
